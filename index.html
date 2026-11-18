@@ -513,6 +513,17 @@ select:focus {
 .text-button:hover {
   color: var(--acid);
 }
+.submit-status {
+  margin: 18px auto 14px;
+  max-width: 520px;
+  color: var(--cream);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  text-align: center;
+}
+.submit-status.ok { color: var(--cyan); }
+.submit-status.error { color: #ff9b9b; }
 .privacy-note {
   margin: 17px 0 0;
   color: #60685f;
@@ -2349,6 +2360,9 @@ body {
 <script>
     "use strict";
 
+    // Paste your Apps Script web app URL (ends in /exec) here.
+    const SUBMIT_URL = "https://script.google.com/macros/s/AKfycbxfbfpCkkSqDtxvuhWKB4geQRYWWB5BLXmmdnUcuSkTI8sqjIDz-yxY7eCMOFc4IFhl/exec";
+
     const scenarios = [
         {
             "sector": "DESERT REGION NEAR THE SETTLEMENT",
@@ -2697,7 +2711,8 @@ body {
         credits: 0,
         lastResult: null,
         answers: [],
-        demographics: { age: "", gender: "", education: "", gaming: "" }
+        demographics: { age: "", gender: "", education: "", gaming: "" },
+        submitStatus: "idle" // idle | sending | sent | failed
     };
 
     const $ = (selector) => document.querySelector(selector);
@@ -2833,7 +2848,7 @@ body {
         <p>You are invited to participate in a research study about decision-making in fictional scenarios. Please read the information below before deciding whether to participate.</p>
         <div class="info-row"><span>01</span><div><h3>What you will do</h3><p>Answer demographic questions, then make choices in 10 fictional scenarios and rate your confidence after each choice.</p></div></div>
         <div class="info-row"><span>02</span><div><h3>Risks &amp; benefits</h3><p>Risks are minimal and similar to those of everyday computer use. There is no direct benefit or compensation stated for taking part.</p></div></div>
-        <div class="info-row"><span>03</span><div><h3>Privacy &amp; choice</h3><p>Your participation is voluntary. You may stop at any time by closing this page. This prototype does not transmit or store your responses.</p></div></div>
+        <div class="info-row"><span>03</span><div><h3>Privacy &amp; choice</h3><p>Your participation is voluntary. You may stop at any time by closing this page; if you stop before the end, nothing is sent. When you finish, your anonymous responses (demographic answers and scenario choices) are sent to a spreadsheet that only the research team can access. We do not collect your name or email address.</p></div></div>
       </div>
       <label class="check-row"><input id="adultCheck" type="checkbox" ${state.adult ? "checked" : ""}><span class="custom-check"></span><span>I confirm that I am 18 years of age or older.</span></label>
       <label class="check-row"><input id="consentCheck" type="checkbox" ${state.consented ? "checked" : ""}><span class="custom-check"></span><span>I have read the information above and voluntarily agree to participate.</span></label>
@@ -3053,9 +3068,21 @@ body {
     <p>${state.credits >= 100 ? `You collected ${state.credits} credits—enough to purchase the replacement hyperdrive component from The Prism.` : `You collected ${state.credits} credits. The Prism requires 100 credits for a replacement hyperdrive, so the journey continues.`} Thank you for contributing to this decision-making study.</p>
     <div class="completion-stats"><div><span>SCENARIOS</span><strong>10 / 10</strong></div><div><span>CREDITS</span><strong>${state.credits} / 100 CR</strong></div><div><span>SESSION</span><strong>ANONYMOUS</strong></div></div>
     <div class="debrief"><span>DEBRIEF</span><p>This study explores how people weigh risk, rules, cooperation, and uncertainty in fictional high-pressure situations. There were no correct or incorrect answers.</p></div>
-    <button class="primary-button" id="downloadResults">Download Study Results</button>
+    ${renderSubmitStatus()}
     <button class="text-button restart" id="restartStudy">START A NEW SESSION</button>
   </section>`;
+    }
+
+    function renderSubmitStatus() {
+        if (state.submitStatus === "sent") {
+            return `<p class="submit-status ok">Your responses have been saved. Thank you! You may now close this tab.</p>`;
+        }
+        if (state.submitStatus === "failed") {
+            return `<p class="submit-status error">We couldn't save your responses automatically. Please try again. If it still fails, download your results and send the file to the research team.</p>
+    <button class="primary-button" id="retrySubmit">TRY AGAIN</button>
+    <button class="text-button restart" id="downloadResults">DOWNLOAD RESULTS INSTEAD</button>`;
+        }
+        return `<p class="submit-status">Saving your responses… please keep this tab open.</p>`;
     }
 
     function render() {
@@ -3112,6 +3139,8 @@ body {
         if (cont) cont.addEventListener("click", continueFromOutcome);
         const restart = $("#restartStudy");
         if (restart) restart.addEventListener("click", resetStudy);
+        const retryButton = $("#retrySubmit");
+        if (retryButton) retryButton.addEventListener("click", submitResults);
         const downloadButton = $("#downloadResults");
         if (downloadButton) {
             downloadButton.addEventListener("click", downloadCSV);
@@ -3134,7 +3163,7 @@ body {
         setStage("outcome");
     }
     function continueFromOutcome() {
-        if (state.current === scenarios.length - 1) setStage("complete");
+        if (state.current === scenarios.length - 1) { setStage("complete"); submitResults(); }
         else {
             state.current++; state.selected = null; state.confidence = null; state.lastResult = null;
             setStage("scenario");
@@ -3150,30 +3179,86 @@ body {
         state.stage = "consent"; state.consented = false; state.adult = false; state.current = 0;
         state.selected = null; state.confidence = null; state.credits = 0; state.lastResult = null;
         state.answers = []; state.demographics = { age: "", gender: "", education: "", gaming: "" };
+        state.submitStatus = "idle";
         render(); scrollTop();
     }
-    function downloadCSV() {
-        const columns = [
-            "participant_id",
-            "scenario",
-            "scenario_title",
-            "choice",
-            "confidence",
-            "success",
-            "skipped",
-            "credit_change"
-        ];
+    const RESULT_COLUMNS = [
+        "participant_id",
+        "age",
+        "gender",
+        "education",
+        "gaming",
+        "scenario",
+        "scenario_title",
+        "choice",
+        "risk_level",
+        "confidence",
+        "success",
+        "skipped",
+        "credit_change",
+        "final_credits"
+    ];
 
-        const rows = state.answers.map((answer, index) => ({
+    function buildResultRows() {
+        const d = state.demographics;
+        return state.answers.map((answer, index) => {
+            const option = scenarios[index].options[answer.choice];
+            return {
+                participant_id: state.participantId,
+                age: d.age,
+                gender: d.gender,
+                education: d.education,
+                gaming: d.gaming,
+                scenario: index + 1,
+                scenario_title: scenarios[index].title,
+                choice: ["A", "B", "C", "D"][answer.choice],
+                risk_level: option ? option.risk : "SKIP",
+                confidence: answer.confidence,
+                success: answer.success,
+                skipped: answer.skipped,
+                credit_change: answer.delta,
+                final_credits: state.credits
+            };
+        });
+    }
+
+    async function submitResults() {
+        if (state.submitStatus === "sending" || state.submitStatus === "sent") return;
+        state.submitStatus = "sending";
+        if (state.stage === "complete") render();
+
+        const payload = {
             participant_id: state.participantId,
-            scenario: index + 1,
-            scenario_title: scenarios[index].title,
-            choice: ["A", "B", "C", "D"][answer.choice],
-            confidence: answer.confidence,
-            success: answer.success,
-            skipped: answer.skipped,
-            credit_change: answer.delta
-        }));
+            demographics: state.demographics,
+            final_credits: state.credits,
+            rows: buildResultRows()
+        };
+
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 20000);
+        try {
+            // No Content-Type header on purpose: the browser sends text/plain,
+            // which avoids a CORS preflight that Apps Script can't answer.
+            const response = await fetch(SUBMIT_URL, {
+                method: "POST",
+                body: JSON.stringify(payload),
+                signal: controller.signal
+            });
+            const result = await response.json();
+            if (!result.ok) throw new Error(result.error || "Server rejected submission");
+            state.submitStatus = "sent";
+        } catch (err) {
+            console.error("Submission failed:", err);
+            state.submitStatus = "failed";
+        } finally {
+            clearTimeout(timer);
+        }
+        if (state.stage === "complete") render();
+    }
+
+    function downloadCSV() {
+        const columns = RESULT_COLUMNS;
+        const rows = buildResultRows();
 
         const escapeCSV = value => {
             const text = value == null ? "" : String(value);
