@@ -1036,7 +1036,7 @@ select:focus {
 }
 .confidence-scale button small {
   margin-top: 6px;
-  font-size: 16px;
+  font-size: 11px;
 }
 .confidence-scale button.selected strong,
 .confidence-scale button.selected small {
