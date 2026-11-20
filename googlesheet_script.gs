@@ -20,13 +20,14 @@ const CONDITIONS = ["numerical", "qualitative", "no_information"];
 const CONDITION_SUFFIX = { numerical: "num", qualitative: "qual", no_information: "none" };
 
 // Sequential IDs (P001_num) come from this script; P + 10 random digits is the page's fallback.
-const ID_RE = /^P\d{3,10}_(num|qual|none)$/;
+const ID_RE =
+    /^participant_(numerical|qualitative|no_information)_[1-9]\d*$/;
 
 const MAX_BODY_CHARS = 200000;
 const MAX_ROWS = 20;
 const MAX_COLUMNS = 150;
 const MAX_TEXT = 2000;
-const COUNTER_KEY = "next_participant_number";
+const COUNTER_PREFIX = "next_participant_number_";
 
 function doPost(e) {
   const lock = LockService.getScriptLock();
@@ -69,12 +70,12 @@ function doGet(e) {
     try {
       lock.waitLock(10000);
       const condition = leastFilledCondition_();
-      const number = reserveParticipantNumber_();
+      const number = reserveParticipantNumber_(condition);
       return json_({
         ok: true,
         condition: condition,
         participant_number: number,
-        participant_id: "P" + String(number).padStart(3, "0") + "_" + CONDITION_SUFFIX[condition]
+        participant_id: `participant_${condition}_${number}`
       });
     } catch (err) {
       return json_({ ok: false, error: String((err && err.message) || err) });
@@ -86,17 +87,20 @@ function doGet(e) {
 }
 
 // Each assignment request takes the next number, so people who quit early leave gaps (P004, P006…).
-function reserveParticipantNumber_() {
-  const props = PropertiesService.getScriptProperties();
-  const next = Number(props.getProperty(COUNTER_KEY) || "1");
-  props.setProperty(COUNTER_KEY, String(next + 1));
-  return next;
-}
 
-// Run this once from the Apps Script editor (select it, click Run) after testing,
-// so real participants start at P001. Clear the test rows from the sheet too.
-function resetParticipantCounter() {
-  PropertiesService.getScriptProperties().setProperty(COUNTER_KEY, "1");
+function reserveParticipantNumber_(condition) {
+    if (!CONDITIONS.includes(condition)) {
+        throw new Error("Invalid condition");
+    }
+
+    const props = PropertiesService.getScriptProperties();
+    const key = COUNTER_PREFIX + condition;
+
+    const next = Number(props.getProperty(key) || "1");
+
+    props.setProperty(key, String(next + 1));
+
+    return next;
 }
 
 // Counts completed participants per condition and returns one of the smallest groups.
@@ -138,8 +142,10 @@ function validate_(data) {
     if (Object.keys(r).length > MAX_COLUMNS) throw new Error("Too many fields");
     if (!["A", "B", "C", "D"].includes(r.choice)) throw new Error("Invalid choice");
     if (!CONDITIONS.includes(r.experimental_condition)) throw new Error("Invalid condition");
-    if (!id.endsWith("_" + CONDITION_SUFFIX[r.experimental_condition])) {
-      throw new Error("participant_id does not match condition");
+    if (!id.startsWith(
+    `participant_${r.experimental_condition}_`
+    )) {
+        throw new Error("participant_id does not match condition");
     }
   });
 }
@@ -198,4 +204,42 @@ function clean_(value) {
 function json_(obj) {
   return ContentService.createTextOutput(JSON.stringify(obj))
     .setMimeType(ContentService.MimeType.JSON);
+}
+
+
+function initializeConditionCounters() {
+  const sheet = getSheet_();
+  const data = sheet.getDataRange().getValues();
+
+  const headers = data[0];
+  const idIndex = headers.indexOf("participant_id");
+  const conditionIndex =
+    headers.indexOf("experimental_condition");
+
+  if (idIndex === -1 || conditionIndex === -1) {
+    throw new Error("Participant ID or condition column missing");
+  }
+
+  const props = PropertiesService.getScriptProperties();
+
+  CONDITIONS.forEach(condition => {
+    const key = COUNTER_PREFIX + condition;
+
+    // Do not overwrite an existing counter.
+    if (props.getProperty(key) !== null) return;
+
+    const ids = new Set(
+      data.slice(1)
+        .filter(row => row[conditionIndex] === condition)
+        .map(row => String(row[idIndex]))
+        .filter(Boolean)
+    );
+
+    props.setProperty(key, String(ids.size + 1));
+
+    Logger.log(
+      condition + " next participant number: " +
+      (ids.size + 1)
+    );
+  });
 }
