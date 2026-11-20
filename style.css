@@ -3106,7 +3106,7 @@ body {
 .game-genre-choice input { width: 18px; height: 18px; flex: 0 0 18px; margin: 0; accent-color: #6ee7ff; cursor: pointer; }
 .game-genre-choice:focus-within { outline: 2px solid #6ee7ff; outline-offset: 2px; }
 @media (max-width: 620px) { .game-genre-grid { grid-template-columns: 1fr; } }
-/* Final background-survey genre layout: full-width and cohesive with select controls. */
+
 .demographic-panel .game-genre-field { grid-column: 1 / -1; width: 100%; }
 .demographic-panel .game-genre-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); }
 .demographic-panel .game-genre-choice { background: #090b1a; border-color: #343b53; box-shadow: none; color: #e7eaff; }
@@ -3114,7 +3114,6 @@ body {
 @media (max-width: 1100px) { .demographic-panel .game-genre-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (max-width: 620px) { .demographic-panel .game-genre-grid { grid-template-columns: 1fr; } }
 
-/* Q7: retain accessible native multiple-selection semantics, without visible checkboxes. */
 .demographic-panel .game-genre-choice { position: relative; justify-content: center; text-align: center; }
 .demographic-panel .game-genre-choice input[type="checkbox"] {
   position: absolute;
@@ -3139,9 +3138,36 @@ body {
   max-width: 520px;
   color: var(--cream);
   font-family: "IBM Plex Mono", monospace;
-  font-size: 12px;
+  font-size: 16px;
   line-height: 1.6;
   text-align: center;
 }
 .submit-status.ok { color: var(--cyan); }
 .submit-status.error { color: #ff9b9b; }
+
+.grips-field, .decision-factors { border: 0; padding: 0; margin: 0; min-width: 0; }
+.grips-field { grid-column: 1 / -1; margin-top: 0; padding-top: 8px; border-top: 1px solid #303656; }
+.grips-field legend { margin-bottom: 0; }
+.grips-field legend, .decision-factors legend { color: #edf2ff; font: 600 16px/1.5 "IBM Plex Mono", monospace; }
+.grips-help, .grips-credit { color: #dce6ff; font-size: 16px; line-height: 1.5; margin: 0 0 12px; }
+.grips-credit { margin: 15px 0 0; opacity: .8; }
+.grips-legend { display: flex; flex-wrap: wrap; gap: 10px 18px; color: #c9d7fc; font: 16px/1.5 "IBM Plex Mono", monospace; margin-bottom: 14px; }
+.grips-items { display: grid; gap: 9px; }
+.grips-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 18px; border: 1px solid #343b53; background: rgba(9,11,26,.72); padding: 12px 16px; }
+.grips-item p { margin: 0; color: #e7eaff; font-size: 16px; line-height: 1.5; }
+.grips-item p span { color: #8ea7ff; font: 500 16px "IBM Plex Mono", monospace; margin-right: 8px; }
+.grips-options { display: flex; gap: 6px; }
+.grips-choice { position: relative; display: inline-flex; cursor: pointer; }
+.grips-choice input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.grips-choice span { display: grid; width: 44px; height: 44px; place-items: center; border: 1px solid #425078; color: #e1eaff; font: 500 16px "IBM Plex Mono", monospace; transition: .15s ease; }
+.grips-choice input:checked + span { border-color: #8ea7ff; background: rgba(142,167,255,.23); color: #fff; box-shadow: inset 0 0 0 1px #8ea7ff; }
+.grips-choice input:focus-visible + span { outline: 2px solid #6ee7ff; outline-offset: 2px; }
+.decision-factors { margin: 25px 0 0; text-align: left; }
+.decision-factors legend span { color: #b6c8e3; font-size: 16px; font-weight: 400; }
+.decision-factors > p { margin: 7px 0 12px; color: #dce6ff; font-size: 16px; }
+.decision-factor-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.decision-factor-choice { display: flex; position: relative; align-items: center; justify-content: center; padding: 11px 12px; min-height: 50px; text-align: center; border: 1px solid #343b53; background: #090b1a; color: #e7eaff; cursor: pointer; font-size: 16px; line-height: 1.5; }
+.decision-factor-choice input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.decision-factor-choice:has(input:checked) { border-color: #8ea7ff; background: rgba(142,167,255,.16); color: #fff; box-shadow: inset 0 0 0 1px rgba(142,167,255,.25); }
+.decision-factor-choice:focus-within { outline: 2px solid #6ee7ff; outline-offset: 2px; }
+@media (max-width: 700px) { .grips-item { grid-template-columns: 1fr; gap: 10px; } .grips-options { justify-content: space-between; } .grips-choice { flex: 1; } .grips-choice span { width: 100%; } .decision-factor-grid { grid-template-columns: 1fr; } }

@@ -370,11 +370,37 @@
     // sessionStorage/localStorage. Reopening or refreshing starts fresh.
     const CONDITIONS = ["numerical", "qualitative", "no_information"];
 
-    function makeParticipantId() {
-        const bytes = new Uint8Array(10);
-        crypto.getRandomValues(bytes);
-        const code = Array.from(bytes, b => b.toString(16).padStart(2, "0")).join("").toUpperCase();
-        return `LSR-${code.slice(0, 5)}-${code.slice(5, 10)}-${code.slice(10, 15)}-${code.slice(15, 20)}`;
+    const CONDITION_SUFFIX = { numerical: "num", qualitative: "qual", no_information: "none" };
+    const GRIPS_ITEMS = [
+        "Taking risks makes life more fun",
+        "My friends would say that I'm a risk taker",
+        "I enjoy taking risks in most aspects of my life",
+        "I would take a risk even if it meant I might get hurt",
+        "Taking risks is an important part of my life",
+        "I commonly make risky decisions",
+        "I am a believer of taking chances",
+        "I am attracted, rather than scared, by risk"
+    ];
+    const DECISION_FACTORS = [
+        { id: "credits", text: "My current credit balance" },
+        { id: "reward", text: "The number of credits I could earn" },
+        { id: "penalty", text: "The number of credits I could lose" },
+        { id: "probability", text: "The likelihood of a successful outcome" },
+        { id: "risk_label", text: "The displayed risk level or description" },
+        { id: "goal", text: "How close I am to the 100-credit goal" },
+        { id: "scenario", text: "The scenario or situation described" },
+        { id: "instinct", text: "My intuition or personal preference" },
+        { id: "other", text: "Other factor(s)" }
+    ];
+    function makeFallbackParticipantId(condition) {
+        // When the server cannot reserve a sequence number, use a nonsequential
+        // high-entropy placeholder; NEVER pretend a local counter is global.
+        const random = new Uint32Array(1);
+        crypto.getRandomValues(random);
+        return `P${String(random[0]).padStart(10, "0")}_${CONDITION_SUFFIX[condition]}`;
+    }
+    function makeSequentialParticipantId(number, condition) {
+        return `P${String(number).padStart(3, "0")}_${CONDITION_SUFFIX[condition]}`;
     }
 
     function randomCondition() {
@@ -398,6 +424,11 @@
             const result = await response.json();
             if (session === state.session && !state.condition && CONDITIONS.includes(result.condition)) {
                 state.suggestedCondition = result.condition;
+                if (typeof result.participant_id === "string" && /^P\d+_(num|qual|none)$/.test(result.participant_id)) {
+                    state.suggestedParticipantId = result.participant_id;
+                } else if (Number.isSafeInteger(Number(result.participant_number)) && Number(result.participant_number) > 0) {
+                    state.suggestedParticipantId = makeSequentialParticipantId(Number(result.participant_number), result.condition);
+                }
             }
         } catch (err) {
             console.warn("Balanced assignment unavailable; will use random assignment.", err);
@@ -417,13 +448,18 @@
             state.condition = randomCondition();
             state.assignmentMethod = "random";
         }
-        state.participantId = makeParticipantId();
+        state.participantId = state.suggestedParticipantId || makeFallbackParticipantId(state.condition);
+        state.idSource = state.suggestedParticipantId ? "server_sequence" : "random_fallback";
     }
 
     const state = {
         participantId: null,
         condition: null,
         suggestedCondition: null,
+        suggestedParticipantId: null,
+        idSource: "",
+        studyStartedAt: performance.now(),
+        studyFinishedAt: null,
         assignmentMethod: "",
         session: 0,
         submitStatus: "idle", // idle | sending | sent | failed
@@ -433,7 +469,7 @@
         current: 0,
         selected: null,
         confidence: null,
-        decisionExplanation: "",
+        decisionFactors: [],
         credits: 0,
         lastResult: null,
         answers: [],
@@ -441,7 +477,7 @@
         decisionTimesMs: [],
         scenarioTimerStartedAt: null,
         scenarioAccumulatedMs: 0,
-        demographics: { age: "", gender: "", education: "", gaming: "", major: "", riskWillingness: "", gameGenres: [] }
+        demographics: { age: "", gender: "", education: "", gaming: "", major: "", grips: Array(8).fill(null), gameGenres: [] }
     };
 
     // Warm the browser cache so later backgrounds appear instantly.
@@ -855,18 +891,29 @@
                                     "Not applicable / not a student",
                                     "Prefer not to say"], "04")}
 
-        ${select("riskWillingness", "WILLINGNESS TO TAKE RISKS", "Select your willingness (1–5)",
-                 ["1 — Not at all willing", "2 — Slightly willing", "3 — Neutral", "4 — Moderately willing", "5 — Very willing"], "05")}
-
         ${select("gaming", "VIDEO GAME EXPERIENCE", "How often do you play?",
                                 ["Never", "Less than once a month",
                                     "A few times a month", "A few times a week",
-                                    "Daily or almost daily"], "06")}
+                                    "Daily or almost daily"], "05")}
 
         <fieldset class="game-genre-field">
-           <legend class="field-label"><b>07</b> VIDEO GAME TYPES (SELECT ALL THAT APPLY)</legend>
+           <legend class="field-label"><b>06</b> VIDEO GAME TYPES (SELECT ALL THAT APPLY)</legend>
            <p class="game-genre-help">What types of video games do you typically play? Leave blank if you prefer not to answer.</p>
            <div class="game-genre-grid">${genreCheckboxes}</div>
+        </fieldset>
+
+        <fieldset class="grips-field">
+          <legend class="field-label"><b>07</b> GENERAL RISK PROPENSITY SCALE (GRiPS)</legend>
+          <p class="grips-help">Please indicate how much you agree or disagree with each statement. All eight items are optional.</p>
+          <div class="grips-legend"><span>1 · Strongly disagree</span><span>2 · Disagree</span><span>3 · Neutral</span><span>4 · Agree</span><span>5 · Strongly agree</span></div>
+          <div class="grips-items">
+            ${GRIPS_ITEMS.map((item, i) => `<div class="grips-item"><p><span>${String(i + 1).padStart(2, "0")}</span> ${escapeHTML(item)}</p>
+              <div class="grips-options" role="group" aria-label="${escapeHTML(item)}">
+                ${[1, 2, 3, 4, 5].map(value => `<label class="grips-choice"><input type="radio" name="grips-${i}" data-grips="${i}" value="${value}" ${d.grips[i] === value ? "checked" : ""}><span>${value}</span></label>`).join("")}
+              </div>
+            </div>`).join("")}
+          </div>
+          <p class="grips-credit">GRiPS · Zhang, Highhouse &amp; Nye (2019)</p>
         </fieldset>
 
        </div>
@@ -1247,11 +1294,13 @@
     <div class="confidence-scale" role="radiogroup" aria-label="Confidence rating"><div class="scale-line"></div>
       ${confidenceLabels.map((label, i) => `<button data-confidence="${i + 1}" role="radio" aria-checked="${state.confidence === i + 1}" class="${state.confidence === i + 1 ? "selected" : ""}"><span class="confidence-dot"><i></i></span><strong>${i + 1}</strong><small>${label}</small></button>`).join("")}
     </div>
-    <div class="decision-explanation">
-      <label for="decisionExplanation">What influenced your decision? <span>(OPTIONAL)</span></label>
-      <textarea id="decisionExplanation" name="decisionExplanation" rows="3" maxlength="2000" placeholder="Tell us what mattered most when choosing this action...">${escapeHTML(state.decisionExplanation)}</textarea>
-      <p>You can leave this blank and continue.</p>
-    </div>
+    <fieldset class="decision-factors">
+      <legend>What influenced your decision? <span>(SELECT ALL THAT APPLY · OPTIONAL)</span></legend>
+      <p>You may select more than one factor or leave this unanswered.</p>
+      <div class="decision-factor-grid">
+        ${DECISION_FACTORS.map(factor => `<label class="decision-factor-choice"><input type="checkbox" data-decision-factor="${factor.id}" value="${factor.id}" ${state.decisionFactors.includes(factor.id) ? "checked" : ""}><span>${escapeHTML(factor.text)}</span></label>`).join("")}
+      </div>
+    </fieldset>
     <div class="form-actions confidence-actions"><button class="text-button" id="backButton">${arrow("left")} CHANGE CHOICE</button><button class="primary-button compact" id="revealOutcome">REVEAL OUTCOME ${arrow()}</button></div>
   </div></section>`;
     }
@@ -1366,6 +1415,11 @@
                 state.demographics.gameGenres = Array.from(document.querySelectorAll("[data-game-genre]:checked"), box => box.value);
             });
         });
+        document.querySelectorAll("[data-grips]").forEach(el => {
+            el.addEventListener("change", e => {
+                state.demographics.grips[Number(e.target.dataset.grips)] = Number(e.target.value);
+            });
+        });
         const back = $("#backButton");
         if (back) back.addEventListener("click", goBack);
         const exitButton = $("#exitStudyButton");
@@ -1392,9 +1446,10 @@
         document.querySelectorAll("[data-confidence]").forEach(el => el.addEventListener("click", () => {
             state.confidence = Number(el.dataset.confidence); render();
         }));
-        const explanationField = $("#decisionExplanation");
-        if (explanationField) explanationField.addEventListener("input", event => {
-            state.decisionExplanation = event.target.value;
+        document.querySelectorAll("[data-decision-factor]").forEach(box => {
+            box.addEventListener("change", () => {
+                state.decisionFactors = Array.from(document.querySelectorAll("[data-decision-factor]:checked"), item => item.value);
+            });
         });
         const reveal = $("#revealOutcome");
         if (reveal) reveal.addEventListener("click", submitConfidence);
@@ -1413,7 +1468,7 @@
     function submitConfidence() {
         if (state.selected === null) return;
         if (state.selected === 3) {
-            state.answers[state.current] = { choice: state.selected, confidence: state.confidence, decisionExplanation: state.decisionExplanation, success: null, delta: 0, skipped: true };
+            state.answers[state.current] = { choice: state.selected, confidence: state.confidence, decisionFactors: [...state.decisionFactors], success: null, delta: 0, skipped: true };
             state.lastResult = { success: false, skipped: true, delta: 0 };
         } else {
             const option = scenarios[state.current].options[state.selected];
@@ -1423,16 +1478,20 @@
             const roll = randomValue[0] / 4294967296;
             const success = roll < probability;
             const delta = success ? option.reward : -Math.min(option.penalty, state.credits);
-            state.answers[state.current] = { choice: state.selected, confidence: state.confidence, decisionExplanation: state.decisionExplanation, success, delta, skipped: false, successProbability: option.probability, probabilityRoll: roll };
+            state.answers[state.current] = { choice: state.selected, confidence: state.confidence, decisionFactors: [...state.decisionFactors], success, delta, skipped: false, successProbability: option.probability, probabilityRoll: roll };
             state.lastResult = { success, skipped: false, delta };
             state.credits = Math.max(0, state.credits + delta);
         }
         setStage("outcome");
     }
     function continueFromOutcome() {
-        if (state.current === scenarios.length - 1) { setStage("complete"); submitResults(); }
+        if (state.current === scenarios.length - 1) {
+            state.studyFinishedAt = performance.now();
+            setStage("complete");
+            submitResults();
+        }
         else {
-            state.current++; state.selected = null; state.confidence = null; state.decisionExplanation = ""; state.lastResult = null;
+            state.current++; state.selected = null; state.confidence = null; state.decisionFactors = []; state.lastResult = null;
             state.scenarioAccumulatedMs = 0; state.scenarioTimerStartedAt = null;
             setStage("scenario");
         }
@@ -1446,67 +1505,70 @@
         state.participantId = null;
         state.condition = null;
         state.suggestedCondition = null;
+        state.suggestedParticipantId = null;
+        state.idSource = "";
+        state.studyStartedAt = performance.now();
+        state.studyFinishedAt = null;
         state.assignmentMethod = "";
         state.session += 1; // Ignore any assignment reply still in flight from the old session.
         state.submitStatus = "idle";
         state.stage = "consent"; state.consented = false; state.adult = false; state.current = 0;
-        state.selected = null; state.confidence = null; state.decisionExplanation = ""; state.credits = 0; state.lastResult = null;
+        state.selected = null; state.confidence = null; state.decisionFactors = []; state.credits = 0; state.lastResult = null;
         state.answers = []; state.optionOrders = []; state.decisionTimesMs = [];
         state.scenarioTimerStartedAt = null; state.scenarioAccumulatedMs = 0;
-        state.demographics = { age: "", gender: "", education: "", gaming: "", major: "", riskWillingness: "", gameGenres: [] };
+        state.demographics = { age: "", gender: "", education: "", gaming: "", major: "", grips: Array(8).fill(null), gameGenres: [] };
         render(); scrollTop();
     }
     const RESULT_COLUMNS = [
-            "participant_id",
-            "experimental_condition",
-            "assignment_method",
-            "age_range",
-            "gender_identity",
-            "highest_education",
-            "major_field_of_study",
-            "video_game_experience",
-            "general_risk_willingness_1_to_5",
-            "video_game_types",
-            "scenario",
-            "scenario_title",
-            "choice",
-            "selected_risk",
-            "success_probability_percent",
-            "probability_roll",
-            "confidence",
-            "decision_explanation",
-            "decision_time_seconds",
-            "success",
-            "skipped",
-            "credit_change",
-            "final_credits"
-        ];
+        "participant_id", "experimental_condition", "assignment_method", "participant_id_source",
+        "total_study_time_seconds", "age_range", "gender_identity", "highest_education",
+        "major_field_of_study", "video_game_experience", "video_game_types",
+        ...GRIPS_ITEMS.map((_, i) => `grips_q${i + 1}`), "grips_mean_score",
+        "scenario", "scenario_title", "choice", "selected_risk",
+        "success_probability_percent", "probability_roll", "confidence",
+        "decision_factors", ...DECISION_FACTORS.map(f => `decision_factor_${f.id}`),
+        "decision_time_seconds", "success", "skipped", "credit_change", "final_credits"
+    ];
     function buildResultRows() {
-        return state.answers.map((answer, index) => ({
-            participant_id: state.participantId,
-            experimental_condition: state.condition,
-            assignment_method: state.assignmentMethod,
-            age_range: state.demographics.age,
-            gender_identity: state.demographics.gender,
-            highest_education: state.demographics.education,
-            major_field_of_study: state.demographics.major,
-            video_game_experience: state.demographics.gaming,
-            general_risk_willingness_1_to_5: state.demographics.riskWillingness === "" ? "" : parseInt(state.demographics.riskWillingness, 10),
-            video_game_types: (state.demographics.gameGenres || []).join("; "),
-            scenario: index + 1,
-            scenario_title: scenarios[index].title,
-            choice: displayChoiceLetter(index, answer.choice),
-            selected_risk: answer.skipped ? "NO ACTION" : scenarios[index].options[answer.choice].risk,
-            success_probability_percent: answer.successProbability ?? "",
-            probability_roll: answer.probabilityRoll ?? "",
-            confidence: answer.confidence,
-            decision_explanation: answer.decisionExplanation ?? "",
-            decision_time_seconds: state.decisionTimesMs[index] == null ? "" : (state.decisionTimesMs[index] / 1000).toFixed(3),
-            success: answer.success,
-            skipped: answer.skipped,
-            credit_change: answer.delta,
-            final_credits: state.credits
-        }));
+        const grips = state.demographics.grips || [];
+        const answered = grips.filter(n => Number.isInteger(n) && n >= 1 && n <= 5);
+        const mean = answered.length === GRIPS_ITEMS.length
+            ? (answered.reduce((a, b) => a + b, 0) / GRIPS_ITEMS.length).toFixed(3)
+            : "";
+        const duration = state.studyFinishedAt == null ? "" :
+            ((state.studyFinishedAt - state.studyStartedAt) / 1000).toFixed(3);
+        return state.answers.map((answer, index) => {
+            const factors = answer.decisionFactors || [];
+            return {
+                participant_id: state.participantId,
+                experimental_condition: state.condition,
+                assignment_method: state.assignmentMethod,
+                participant_id_source: state.idSource,
+                total_study_time_seconds: duration,
+                age_range: state.demographics.age,
+                gender_identity: state.demographics.gender,
+                highest_education: state.demographics.education,
+                major_field_of_study: state.demographics.major,
+                video_game_experience: state.demographics.gaming,
+                video_game_types: (state.demographics.gameGenres || []).join("; "),
+                ...Object.fromEntries(GRIPS_ITEMS.map((_, i) => [`grips_q${i + 1}`, grips[i] ?? ""])),
+                grips_mean_score: mean,
+                scenario: index + 1,
+                scenario_title: scenarios[index].title,
+                choice: displayChoiceLetter(index, answer.choice),
+                selected_risk: answer.skipped ? "NO ACTION" : scenarios[index].options[answer.choice].risk,
+                success_probability_percent: answer.successProbability ?? "",
+                probability_roll: answer.probabilityRoll ?? "",
+                confidence: answer.confidence ?? "",
+                decision_factors: factors.join("; "),
+                ...Object.fromEntries(DECISION_FACTORS.map(f => [`decision_factor_${f.id}`, factors.includes(f.id) ? 1 : 0])),
+                decision_time_seconds: state.decisionTimesMs[index] == null ? "" : (state.decisionTimesMs[index] / 1000).toFixed(3),
+                success: answer.success,
+                skipped: answer.skipped,
+                credit_change: answer.delta,
+                final_credits: state.credits
+            };
+        });
     }
     async function submitResults() {
         if (state.submitStatus === "sending" || state.submitStatus === "sent") return;
